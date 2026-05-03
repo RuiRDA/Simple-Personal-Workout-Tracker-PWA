@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  Area,
   Bar,
-  BarChart,
   CartesianGrid,
-  Legend,
+  ComposedChart,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -11,35 +12,61 @@ import {
 } from 'recharts'
 import './App.css'
 import {
+  dateKeyToLocalDate,
   db,
   deleteLog,
   exportCsv,
   exportJson,
   formatAmount,
+  formatDateLabel,
   formatTime,
   getAllLogs,
-  getTodayLogs,
+  getLogsForDate,
   importJsonLogs,
   logExercise,
+  timestampForDateKey,
   toLocalDateKey,
   type ExerciseLog,
   type ExerciseUnit,
 } from './db'
 import { DEFAULT_EXERCISES, exerciseById, getExerciseLabel } from './exercises'
 
-type Tab = 'quick' | 'today' | 'dashboard' | 'export'
+type Tab = 'quick' | 'day' | 'dashboard' | 'export'
 
 type Toast = {
   log: ExerciseLog
   message: string
 }
 
+type ChartPoint = {
+  date: string
+  label: string
+  totalReps: number
+  pushups: number
+  bicep_curls: number
+  selected: number
+}
+
+type ChartTooltipProps = {
+  active?: boolean
+  label?: string
+  payload?: {
+    color?: string
+    dataKey?: string | number
+    name?: string
+    value?: number
+  }[]
+}
+
 const tabs: { id: Tab; label: string }[] = [
-  { id: 'quick', label: 'Quick Log' },
-  { id: 'today', label: 'Today' },
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'export', label: 'Export' },
+  { id: 'quick', label: 'Quick' },
+  { id: 'day', label: 'Day' },
+  { id: 'dashboard', label: 'Charts' },
+  { id: 'export', label: 'Data' },
 ]
+
+const chartMargins = { top: 12, right: 8, bottom: 0, left: -18 }
+const axisStyle = { fill: 'var(--chart-muted)', fontSize: 12, fontWeight: 700 }
 
 function totalsByExercise(logs: ExerciseLog[]) {
   return logs.reduce<Record<string, number>>((totals, log) => {
@@ -58,10 +85,41 @@ function downloadText(filename: string, contents: string, type: string) {
   URL.revokeObjectURL(url)
 }
 
+function shiftDate(dateKey: string, days: number) {
+  const date = dateKeyToLocalDate(dateKey)
+  date.setDate(date.getDate() + days)
+  return toLocalDateKey(date)
+}
+
+function formatChartLabel(dateKey: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+  }).format(dateKeyToLocalDate(dateKey))
+}
+
+function CustomTooltip({ active, payload, label }: ChartTooltipProps) {
+  if (!active || !payload?.length) {
+    return null
+  }
+
+  return (
+    <div className="chart-tooltip">
+      <strong>{label}</strong>
+      {payload.map((entry) => (
+        <span key={entry.dataKey} style={{ color: entry.color }}>
+          {entry.name}: {entry.value}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('quick')
   const [logs, setLogs] = useState<ExerciseLog[]>([])
-  const [todayLogs, setTodayLogs] = useState<ExerciseLog[]>([])
+  const [selectedDate, setSelectedDate] = useState(toLocalDateKey(new Date()))
+  const [selectedLogs, setSelectedLogs] = useState<ExerciseLog[]>([])
   const [toast, setToast] = useState<Toast | null>(null)
   const [customExercise, setCustomExercise] = useState(DEFAULT_EXERCISES[0].id)
   const [customAmount, setCustomAmount] = useState('')
@@ -69,29 +127,42 @@ function App() {
   const [importStatus, setImportStatus] = useState('')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-  async function refreshLogs() {
-    const [allLogs, todaysLogs] = await Promise.all([getAllLogs(), getTodayLogs()])
+  const todayKey = toLocalDateKey(new Date())
+  const isToday = selectedDate === todayKey
+
+  const refreshLogs = useCallback(async (dateKey = selectedDate) => {
+    const [allLogs, dayLogs] = await Promise.all([
+      getAllLogs(),
+      getLogsForDate(dateKey),
+    ])
     setLogs(allLogs)
-    setTodayLogs(todaysLogs)
-  }
+    setSelectedLogs(dayLogs)
+  }, [selectedDate])
 
   useEffect(() => {
     queueMicrotask(() => {
-      void refreshLogs()
+      void refreshLogs(selectedDate)
     })
-  }, [])
+  }, [refreshLogs, selectedDate])
 
   async function handleLog(
     exercise: string,
     amount: number,
     unit: ExerciseUnit,
   ) {
-    const savedLog = await logExercise(exercise, amount, unit)
+    const savedLog = await logExercise(
+      exercise,
+      amount,
+      unit,
+      timestampForDateKey(selectedDate),
+    )
     setToast({
       log: savedLog,
-      message: `Saved +${amount} ${getExerciseLabel(exercise)}`,
+      message: `Saved +${amount} ${getExerciseLabel(exercise)} for ${formatDateLabel(
+        selectedDate,
+      )}`,
     })
-    await refreshLogs()
+    await refreshLogs(selectedDate)
   }
 
   async function handleUndo() {
@@ -99,7 +170,7 @@ function App() {
 
     await deleteLog(toast.log.id)
     setToast(null)
-    await refreshLogs()
+    await refreshLogs(selectedDate)
   }
 
   async function handleDelete(id: string) {
@@ -107,7 +178,7 @@ function App() {
     if (toast?.log.id === id) {
       setToast(null)
     }
-    await refreshLogs()
+    await refreshLogs(selectedDate)
   }
 
   async function handleCustomSave(event: React.FormEvent<HTMLFormElement>) {
@@ -137,7 +208,7 @@ function App() {
     try {
       const imported = await importJsonLogs(await file.text())
       setImportStatus(`Imported ${imported} logs`)
-      await refreshLogs()
+      await refreshLogs(selectedDate)
     } catch (error) {
       setImportStatus(error instanceof Error ? error.message : 'Import failed')
     } finally {
@@ -155,34 +226,38 @@ function App() {
     await db.logs.clear()
     setToast(null)
     setImportStatus('All logs cleared')
-    await refreshLogs()
+    await refreshLogs(selectedDate)
   }
 
-  const todayTotals = useMemo(() => totalsByExercise(todayLogs), [todayLogs])
+  const selectedTotals = useMemo(
+    () => totalsByExercise(selectedLogs),
+    [selectedLogs],
+  )
 
-  const timelineTotals = useMemo(() => {
+  const daySummary = useMemo(() => {
     return DEFAULT_EXERCISES.map((exercise) => ({
       ...exercise,
-      total: todayTotals[exercise.id] ?? 0,
+      total: selectedTotals[exercise.id] ?? 0,
     })).filter((exercise) => exercise.total > 0)
-  }, [todayTotals])
+  }, [selectedTotals])
 
-  const chartData = useMemo(() => {
-    const byDate = [...logs].reverse().reduce<
-      Record<
-        string,
-        {
-          date: string
-          totalReps: number
-          pushups: number
-          bicep_curls: number
-          selected: number
-        }
-      >
-    >((days, log) => {
+  const quickStats = useMemo(() => {
+    const reps = selectedLogs
+      .filter((log) => log.unit === 'reps')
+      .reduce((total, log) => total + log.amount, 0)
+    const seconds = selectedLogs
+      .filter((log) => log.unit === 'seconds')
+      .reduce((total, log) => total + log.amount, 0)
+
+    return { reps, seconds, entries: selectedLogs.length }
+  }, [selectedLogs])
+
+  const chartData = useMemo<ChartPoint[]>(() => {
+    const totals = logs.reduce<Record<string, ChartPoint>>((days, log) => {
       const date = toLocalDateKey(log.timestamp)
       days[date] ??= {
         date,
+        label: formatChartLabel(date),
         totalReps: 0,
         pushups: 0,
         bicep_curls: 0,
@@ -208,8 +283,26 @@ function App() {
       return days
     }, {})
 
-    return Object.values(byDate).slice(-14)
-  }, [chartExercise, logs])
+    const endDate = dateKeyToLocalDate(todayKey)
+    const days = Array.from({ length: 14 }, (_, index) => {
+      const date = new Date(endDate)
+      date.setDate(endDate.getDate() - (13 - index))
+      const key = toLocalDateKey(date)
+
+      return (
+        totals[key] ?? {
+          date: key,
+          label: formatChartLabel(key),
+          totalReps: 0,
+          pushups: 0,
+          bicep_curls: 0,
+          selected: 0,
+        }
+      )
+    })
+
+    return days
+  }, [chartExercise, logs, todayKey])
 
   const chartUnit = exerciseById.get(chartExercise)?.unit ?? 'reps'
 
@@ -218,10 +311,48 @@ function App() {
       <header className="app-header">
         <div>
           <p className="eyebrow">Workout Tracker</p>
-          <h1>Quick sets</h1>
+          <h1>{formatDateLabel(selectedDate)}</h1>
         </div>
-        <div className="today-pill">{todayLogs.length} today</div>
+        <div className="hero-metrics" aria-label="Selected day totals">
+          <span>{quickStats.entries} logs</span>
+          <strong>{quickStats.reps} reps</strong>
+          {quickStats.seconds > 0 && <span>{quickStats.seconds}s</span>}
+        </div>
       </header>
+
+      <section className="date-dock" aria-label="Selected workout day">
+        <button
+          className="icon-button"
+          onClick={() => setSelectedDate((date) => shiftDate(date, -1))}
+          type="button"
+        >
+          Prev
+        </button>
+        <label className="date-field">
+          <span>Log date</span>
+          <input
+            onChange={(event) => setSelectedDate(event.target.value)}
+            type="date"
+            value={selectedDate}
+          />
+        </label>
+        <button
+          className="icon-button"
+          disabled={isToday}
+          onClick={() => setSelectedDate((date) => shiftDate(date, 1))}
+          type="button"
+        >
+          Next
+        </button>
+        <button
+          className="today-button"
+          disabled={isToday}
+          onClick={() => setSelectedDate(todayKey)}
+          type="button"
+        >
+          Today
+        </button>
+      </section>
 
       <nav className="tabs" aria-label="App sections">
         {tabs.map((tab) => (
@@ -251,11 +382,15 @@ function App() {
           <div className="exercise-grid">
             {DEFAULT_EXERCISES.map((exercise) => (
               <article className="exercise-card" key={exercise.id}>
-                <div>
-                  <h2>{exercise.label}</h2>
-                  <p>
-                    Today: {formatAmount(todayTotals[exercise.id] ?? 0, exercise.unit)}
-                  </p>
+                <div className="exercise-card-heading">
+                  <div>
+                    <h2>{exercise.label}</h2>
+                    <p>
+                      {formatDateLabel(selectedDate)}:{' '}
+                      {formatAmount(selectedTotals[exercise.id] ?? 0, exercise.unit)}
+                    </p>
+                  </div>
+                  <span>{exercise.unit}</span>
                 </div>
                 <div className="preset-row">
                   {exercise.presets.map((preset) => (
@@ -274,7 +409,10 @@ function App() {
           </div>
 
           <form className="custom-entry" onSubmit={handleCustomSave}>
-            <h2>Custom</h2>
+            <div>
+              <h2>Custom entry</h2>
+              <p>Saved to {formatDateLabel(selectedDate)}.</p>
+            </div>
             <div className="form-row">
               <label>
                 <span>Exercise</span>
@@ -308,13 +446,13 @@ function App() {
         </section>
       )}
 
-      {activeTab === 'today' && (
+      {activeTab === 'day' && (
         <section className="screen">
           <div className="summary-strip">
-            {timelineTotals.length === 0 ? (
-              <p>No logs yet today</p>
+            {daySummary.length === 0 ? (
+              <p>No logs for {formatDateLabel(selectedDate)}.</p>
             ) : (
-              timelineTotals.map((exercise) => (
+              daySummary.map((exercise) => (
                 <div className="summary-item" key={exercise.id}>
                   <strong>{exercise.total}</strong>
                   <span>
@@ -326,11 +464,14 @@ function App() {
           </div>
 
           <div className="timeline">
-            <h2>Today</h2>
-            {todayLogs.length === 0 ? (
-              <p className="empty-state">Your taps will show up here.</p>
+            <div className="timeline-title">
+              <h2>{formatDateLabel(selectedDate)} timeline</h2>
+              <span>{selectedLogs.length} entries</span>
+            </div>
+            {selectedLogs.length === 0 ? (
+              <p className="empty-state">Quick logs for this day will show up here.</p>
             ) : (
-              todayLogs.map((log) => (
+              selectedLogs.map((log) => (
                 <article className="timeline-entry" key={log.id}>
                   <div>
                     <time>{formatTime(log.timestamp)}</time>
@@ -354,49 +495,86 @@ function App() {
 
       {activeTab === 'dashboard' && (
         <section className="screen dashboard-screen">
-          <div className="chart-panel">
+          <div className="chart-panel feature-chart">
             <div className="panel-heading">
-              <h2>Total reps per day</h2>
-              <p>Seconds-only exercises are excluded.</p>
+              <div>
+                <p className="eyebrow">Last 14 days</p>
+                <h2>Total reps</h2>
+              </div>
+              <strong>{chartData.at(-1)?.totalReps ?? 0}</strong>
             </div>
-            <ResponsiveContainer height={240} width="100%">
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                <YAxis allowDecimals={false} width={36} />
-                <Tooltip />
-                <Bar dataKey="totalReps" fill="#2563eb" name="Total reps" radius={[4, 4, 0, 0]} />
-              </BarChart>
+            <ResponsiveContainer height={260} width="100%">
+              <ComposedChart data={chartData} margin={chartMargins}>
+                <defs>
+                  <linearGradient id="totalRepsFill" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stopColor="#22c55e" stopOpacity={0.5} />
+                    <stop offset="100%" stopColor="#22c55e" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+                <XAxis dataKey="label" tick={axisStyle} tickLine={false} axisLine={false} />
+                <YAxis
+                  allowDecimals={false}
+                  tick={axisStyle}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <Tooltip content={<CustomTooltip />} cursor={{ fill: 'var(--chart-cursor)' }} />
+                <Area
+                  dataKey="totalReps"
+                  fill="url(#totalRepsFill)"
+                  name="Total reps"
+                  stroke="#22c55e"
+                  strokeWidth={3}
+                  type="monotone"
+                />
+                <Bar
+                  dataKey="totalReps"
+                  fill="#14b8a6"
+                  name="Total reps"
+                  opacity={0.55}
+                  radius={[6, 6, 2, 2]}
+                />
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
 
           <div className="chart-panel">
             <div className="panel-heading">
-              <h2>Favorites</h2>
-              <p>Pushups and bicep curls per day.</p>
+              <div>
+                <p className="eyebrow">Favorites</p>
+                <h2>Pushups vs curls</h2>
+              </div>
             </div>
             <ResponsiveContainer height={240} width="100%">
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                <YAxis allowDecimals={false} width={36} />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="pushups" fill="#16a34a" name="Pushups" radius={[4, 4, 0, 0]} />
-                <Bar
-                  dataKey="bicep_curls"
-                  fill="#f97316"
-                  name="Bicep curls"
-                  radius={[4, 4, 0, 0]}
+              <ComposedChart data={chartData} margin={chartMargins}>
+                <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+                <XAxis dataKey="label" tick={axisStyle} tickLine={false} axisLine={false} />
+                <YAxis
+                  allowDecimals={false}
+                  tick={axisStyle}
+                  tickLine={false}
+                  axisLine={false}
                 />
-              </BarChart>
+                <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'var(--chart-cursor)' }} />
+                <Bar dataKey="pushups" fill="#38bdf8" name="Pushups" radius={[6, 6, 2, 2]} />
+                <Line
+                  dataKey="bicep_curls"
+                  dot={{ fill: '#f97316', r: 4 }}
+                  name="Bicep curls"
+                  stroke="#f97316"
+                  strokeWidth={3}
+                  type="monotone"
+                />
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
 
           <div className="chart-panel">
             <div className="panel-heading selector-heading">
               <div>
-                <h2>Any exercise</h2>
+                <p className="eyebrow">Explorer</p>
+                <h2>{getExerciseLabel(chartExercise)}</h2>
                 <p>Shown in {chartUnit}.</p>
               </div>
               <select
@@ -411,18 +589,23 @@ function App() {
               </select>
             </div>
             <ResponsiveContainer height={240} width="100%">
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                <YAxis allowDecimals={false} width={36} />
-                <Tooltip />
+              <ComposedChart data={chartData} margin={chartMargins}>
+                <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+                <XAxis dataKey="label" tick={axisStyle} tickLine={false} axisLine={false} />
+                <YAxis
+                  allowDecimals={false}
+                  tick={axisStyle}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <Tooltip content={<CustomTooltip />} cursor={{ fill: 'var(--chart-cursor)' }} />
                 <Bar
                   dataKey="selected"
-                  fill="#0f766e"
+                  fill="#a78bfa"
                   name={`${getExerciseLabel(chartExercise)} ${chartUnit}`}
-                  radius={[4, 4, 0, 0]}
+                  radius={[6, 6, 2, 2]}
                 />
-              </BarChart>
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
         </section>

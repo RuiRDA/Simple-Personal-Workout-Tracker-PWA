@@ -32,6 +32,45 @@ export function toLocalDateKey(dateInput: string | Date) {
   return `${year}-${month}-${day}`
 }
 
+export function dateKeyToLocalDate(dateKey: string) {
+  const [year, month, day] = dateKey.split('-').map(Number)
+  return new Date(year, month - 1, day)
+}
+
+export function timestampForDateKey(dateKey: string) {
+  const selectedDate = dateKeyToLocalDate(dateKey)
+  const now = new Date()
+
+  selectedDate.setHours(
+    now.getHours(),
+    now.getMinutes(),
+    now.getSeconds(),
+    now.getMilliseconds(),
+  )
+
+  return selectedDate.toISOString()
+}
+
+export function formatDateLabel(dateKey: string) {
+  const today = toLocalDateKey(new Date())
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+
+  if (dateKey === today) {
+    return 'Today'
+  }
+
+  if (dateKey === toLocalDateKey(yesterday)) {
+    return 'Yesterday'
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  }).format(dateKeyToLocalDate(dateKey))
+}
+
 export function formatTime(timestamp: string) {
   return new Intl.DateTimeFormat(undefined, {
     hour: '2-digit',
@@ -47,13 +86,14 @@ export async function logExercise(
   exercise: string,
   amount: number,
   unit: ExerciseUnit,
+  timestamp = new Date().toISOString(),
 ) {
   const log: ExerciseLog = {
     id: crypto.randomUUID(),
     exercise,
     amount,
     unit,
-    timestamp: new Date().toISOString(),
+    timestamp,
   }
 
   await db.logs.add(log)
@@ -65,10 +105,13 @@ export async function deleteLog(id: string) {
 }
 
 export async function getTodayLogs() {
-  const today = toLocalDateKey(new Date())
+  return getLogsForDate(toLocalDateKey(new Date()))
+}
+
+export async function getLogsForDate(dateKey: string) {
   const logs = await getAllLogs()
 
-  return logs.filter((log) => toLocalDateKey(log.timestamp) === today)
+  return logs.filter((log) => toLocalDateKey(log.timestamp) === dateKey)
 }
 
 export async function getAllLogs() {
