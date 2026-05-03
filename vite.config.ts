@@ -2,9 +2,13 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
+const pagesBase = process.env.GITHUB_ACTIONS
+  ? '/Simple-Personal-Workout-Tracker-PWA/'
+  : './'
+
 // https://vite.dev/config/
 export default defineConfig({
-  base: './',
+  base: pagesBase,
   plugins: [
     react(),
     VitePWA({
@@ -18,11 +22,11 @@ export default defineConfig({
         background_color: '#f6f7f3',
         display: 'standalone',
         orientation: 'portrait',
-        start_url: '/',
-        scope: '/',
+        start_url: pagesBase,
+        scope: pagesBase,
         icons: [
           {
-            src: '/app-icon.svg',
+            src: `${pagesBase}app-icon.svg`,
             sizes: 'any',
             type: 'image/svg+xml',
             purpose: 'any maskable',
