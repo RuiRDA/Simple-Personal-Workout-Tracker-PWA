@@ -5,6 +5,7 @@ import {
   CartesianGrid,
   ComposedChart,
   Line,
+  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -45,6 +46,7 @@ type ChartPoint = {
   pushups: number
   bicep_curls: number
   selected: number
+  [exerciseId: string]: string | number
 }
 
 type ChartTooltipProps = {
@@ -67,6 +69,15 @@ const tabs: { id: Tab; label: string }[] = [
 
 const chartMargins = { top: 12, right: 8, bottom: 0, left: -18 }
 const axisStyle = { fill: 'var(--chart-muted)', fontSize: 12, fontWeight: 700 }
+const exerciseColors = [
+  '#22c55e',
+  '#38bdf8',
+  '#f97316',
+  '#a78bfa',
+  '#f43f5e',
+  '#eab308',
+  '#14b8a6',
+]
 
 function totalsByExercise(logs: ExerciseLog[]) {
   return logs.reduce<Record<string, number>>((totals, log) => {
@@ -262,6 +273,9 @@ function App() {
         pushups: 0,
         bicep_curls: 0,
         selected: 0,
+        ...Object.fromEntries(
+          DEFAULT_EXERCISES.map((exercise) => [exercise.id, 0]),
+        ),
       }
 
       if (log.unit === 'reps') {
@@ -280,6 +294,8 @@ function App() {
         days[date].selected += log.amount
       }
 
+      days[date][log.exercise] = Number(days[date][log.exercise] ?? 0) + log.amount
+
       return days
     }, {})
 
@@ -297,6 +313,9 @@ function App() {
           pushups: 0,
           bicep_curls: 0,
           selected: 0,
+          ...Object.fromEntries(
+            DEFAULT_EXERCISES.map((exercise) => [exercise.id, 0]),
+          ),
         }
       )
     })
@@ -566,6 +585,50 @@ function App() {
                   strokeWidth={3}
                   type="monotone"
                 />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="chart-panel feature-chart">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">All exercises</p>
+                <h2>Daily trends</h2>
+                <p>Each line keeps its own exercise unit.</p>
+              </div>
+            </div>
+            <ResponsiveContainer height={320} width="100%">
+              <ComposedChart data={chartData} margin={{ ...chartMargins, right: 18 }}>
+                <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+                <XAxis dataKey="label" tick={axisStyle} tickLine={false} axisLine={false} />
+                <YAxis
+                  allowDecimals={false}
+                  tick={axisStyle}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'var(--chart-cursor)' }} />
+                <Legend
+                  iconType="circle"
+                  wrapperStyle={{
+                    color: 'var(--chart-muted)',
+                    fontSize: 12,
+                    fontWeight: 800,
+                    paddingTop: 12,
+                  }}
+                />
+                {DEFAULT_EXERCISES.map((exercise, index) => (
+                  <Line
+                    activeDot={{ r: 6, strokeWidth: 0 }}
+                    dataKey={exercise.id}
+                    dot={{ r: 3, strokeWidth: 0 }}
+                    key={exercise.id}
+                    name={`${exercise.label} (${exercise.unit})`}
+                    stroke={exerciseColors[index % exerciseColors.length]}
+                    strokeWidth={3}
+                    type="monotone"
+                  />
+                ))}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
