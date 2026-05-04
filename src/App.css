@@ -216,6 +216,12 @@ label span {
   margin: 4px 0 0;
 }
 
+.exercise-note {
+  color: var(--accent-strong) !important;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
 .preset-row {
   display: grid;
   gap: 8px;

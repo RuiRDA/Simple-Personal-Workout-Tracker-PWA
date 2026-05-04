@@ -50,6 +50,12 @@ export const DEFAULT_EXERCISES: ExerciseDefinition[] = [
     unit: 'reps',
     presets: [8, 10, 12],
   },
+  {
+    id: 'arm_raises',
+    label: 'Arm Raises',
+    unit: 'reps',
+    presets: [10, 15, 20],
+  },
 ]
 
 export const exerciseById = new Map(

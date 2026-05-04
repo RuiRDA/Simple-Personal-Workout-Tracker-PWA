@@ -408,6 +408,9 @@ function App() {
                       {formatDateLabel(selectedDate)}:{' '}
                       {formatAmount(selectedTotals[exercise.id] ?? 0, exercise.unit)}
                     </p>
+                    {['bicep_curls', 'arm_raises'].includes(exercise.id) && (
+                      <p className="exercise-note">+10 means 10 reps each arm.</p>
+                    )}
                   </div>
                   <span>{exercise.unit}</span>
                 </div>
