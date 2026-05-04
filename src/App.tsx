@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react'
 import {
   Area,
   Bar,
@@ -43,9 +50,11 @@ type ChartPoint = {
   date: string
   label: string
   totalReps: number
-  pushups: number
-  bicep_curls: number
-  selected: number
+  totalSeconds: number
+  cumulativeReps: number
+  selectedDaily: number
+  selectedCumulative: number
+  activeExercises: number
   [exerciseId: string]: string | number
 }
 
@@ -69,6 +78,7 @@ const tabs: { id: Tab; label: string }[] = [
 
 const chartMargins = { top: 12, right: 8, bottom: 0, left: -18 }
 const axisStyle = { fill: 'var(--chart-muted)', fontSize: 12, fontWeight: 700 }
+const chartWindowDays = 14
 const exerciseColors = [
   '#22c55e',
   '#38bdf8',
@@ -77,7 +87,12 @@ const exerciseColors = [
   '#f43f5e',
   '#eab308',
   '#14b8a6',
+  '#fb7185',
 ]
+
+function exerciseSeriesKey(exerciseId: string) {
+  return `exercise_${exerciseId}`
+}
 
 function totalsByExercise(logs: ExerciseLog[]) {
   return logs.reduce<Record<string, number>>((totals, log) => {
@@ -114,10 +129,23 @@ function CustomTooltip({ active, payload, label }: ChartTooltipProps) {
     return null
   }
 
+  const seen = new Set<string | number>()
+  const uniqueEntries = payload.filter((entry) => {
+    const key = entry.dataKey ?? entry.name ?? ''
+    if (seen.has(key)) {
+      return false
+    }
+
+    seen.add(key)
+    return typeof entry.value === 'number'
+  })
+  const visibleEntries = uniqueEntries.filter((entry) => entry.value !== 0)
+  const entries = visibleEntries.length > 0 ? visibleEntries : uniqueEntries
+
   return (
     <div className="chart-tooltip">
       <strong>{label}</strong>
-      {payload.map((entry) => (
+      {entries.map((entry) => (
         <span key={entry.dataKey} style={{ color: entry.color }}>
           {entry.name}: {entry.value}
         </span>
@@ -264,64 +292,128 @@ function App() {
   }, [selectedLogs])
 
   const chartData = useMemo<ChartPoint[]>(() => {
+    const emptyExerciseTotals = Object.fromEntries(
+      DEFAULT_EXERCISES.map((exercise) => [exerciseSeriesKey(exercise.id), 0]),
+    )
+
     const totals = logs.reduce<Record<string, ChartPoint>>((days, log) => {
       const date = toLocalDateKey(log.timestamp)
       days[date] ??= {
         date,
         label: formatChartLabel(date),
         totalReps: 0,
-        pushups: 0,
-        bicep_curls: 0,
-        selected: 0,
-        ...Object.fromEntries(
-          DEFAULT_EXERCISES.map((exercise) => [exercise.id, 0]),
-        ),
+        totalSeconds: 0,
+        cumulativeReps: 0,
+        selectedDaily: 0,
+        selectedCumulative: 0,
+        activeExercises: 0,
+        ...emptyExerciseTotals,
       }
 
       if (log.unit === 'reps') {
         days[date].totalReps += log.amount
-      }
-
-      if (log.exercise === 'pushups') {
-        days[date].pushups += log.amount
-      }
-
-      if (log.exercise === 'bicep_curls') {
-        days[date].bicep_curls += log.amount
+      } else {
+        days[date].totalSeconds += log.amount
       }
 
       if (log.exercise === chartExercise) {
-        days[date].selected += log.amount
+        days[date].selectedDaily += log.amount
       }
 
-      days[date][log.exercise] = Number(days[date][log.exercise] ?? 0) + log.amount
+      const seriesKey = exerciseSeriesKey(log.exercise)
+      days[date][seriesKey] = Number(days[date][seriesKey] ?? 0) + log.amount
 
       return days
     }, {})
 
     const endDate = dateKeyToLocalDate(todayKey)
-    const days = Array.from({ length: 14 }, (_, index) => {
-      const date = new Date(endDate)
-      date.setDate(endDate.getDate() - (13 - index))
-      const key = toLocalDateKey(date)
 
-      return (
+    const result = Array.from({ length: chartWindowDays }).reduce<{
+      cumulativeReps: number
+      days: ChartPoint[]
+      selectedCumulative: number
+    }>((progress, _, index) => {
+      const date = new Date(endDate)
+      date.setDate(endDate.getDate() - (chartWindowDays - 1 - index))
+      const key = toLocalDateKey(date)
+      const point =
         totals[key] ?? {
           date: key,
           label: formatChartLabel(key),
           totalReps: 0,
-          pushups: 0,
-          bicep_curls: 0,
-          selected: 0,
-          ...Object.fromEntries(
-            DEFAULT_EXERCISES.map((exercise) => [exercise.id, 0]),
-          ),
+          totalSeconds: 0,
+          cumulativeReps: 0,
+          selectedDaily: 0,
+          selectedCumulative: 0,
+          activeExercises: 0,
+          ...emptyExerciseTotals,
         }
-      )
+
+      const cumulativeReps = progress.cumulativeReps + point.totalReps
+      const selectedCumulative =
+        progress.selectedCumulative + point.selectedDaily
+      const activeExercises = DEFAULT_EXERCISES.filter(
+        (exercise) => Number(point[exerciseSeriesKey(exercise.id)] ?? 0) > 0,
+      ).length
+
+      return {
+        cumulativeReps,
+        days: [
+          ...progress.days,
+          {
+            ...point,
+            activeExercises,
+            cumulativeReps,
+            selectedCumulative,
+          },
+        ],
+        selectedCumulative,
+      }
+    }, {
+      cumulativeReps: 0,
+      days: [],
+      selectedCumulative: 0,
     })
 
-    return days
+    return result.days
   }, [chartExercise, logs, todayKey])
+
+  const chartSummary = useMemo(() => {
+    const activeDays = chartData.filter(
+      (day) => day.totalReps > 0 || day.totalSeconds > 0,
+    ).length
+    const periodReps = chartData.reduce((total, day) => total + day.totalReps, 0)
+    const periodSeconds = chartData.reduce(
+      (total, day) => total + day.totalSeconds,
+      0,
+    )
+    const exerciseTotals = DEFAULT_EXERCISES.map((exercise) => ({
+      ...exercise,
+      total: chartData.reduce(
+        (total, day) => total + Number(day[exerciseSeriesKey(exercise.id)] ?? 0),
+        0,
+      ),
+    })).sort((a, b) => b.total - a.total)
+    const topExercise = exerciseTotals.find((exercise) => exercise.total > 0)
+
+    return {
+      activeDays,
+      averageReps: activeDays > 0 ? Math.round(periodReps / activeDays) : 0,
+      periodReps,
+      periodSeconds,
+      topExercise,
+    }
+  }, [chartData])
+
+  const recentExerciseTotals = useMemo(() => {
+    return DEFAULT_EXERCISES.map((exercise) => ({
+      ...exercise,
+      total: chartData.reduce(
+        (total, day) => total + Number(day[exerciseSeriesKey(exercise.id)] ?? 0),
+        0,
+      )
+    })).filter((exercise) => exercise.total > 0)
+  }, [chartData])
 
   const chartUnit = exerciseById.get(chartExercise)?.unit ?? 'reps'
 
@@ -517,13 +609,38 @@ function App() {
 
       {activeTab === 'dashboard' && (
         <section className="screen dashboard-screen">
+          <div className="chart-stat-grid">
+            <article className="chart-stat-card">
+              <span>14-day reps</span>
+              <strong>{chartSummary.periodReps}</strong>
+            </article>
+            <article className="chart-stat-card">
+              <span>Active days</span>
+              <strong>{chartSummary.activeDays}</strong>
+            </article>
+            <article className="chart-stat-card">
+              <span>Daily average</span>
+              <strong>{chartSummary.averageReps}</strong>
+            </article>
+            <article className="chart-stat-card">
+              <span>Top exercise</span>
+              <strong>{chartSummary.topExercise?.label ?? 'None'}</strong>
+              {chartSummary.topExercise && (
+                <small>
+                  {chartSummary.topExercise.total} {chartSummary.topExercise.unit}
+                </small>
+              )}
+            </article>
+          </div>
+
           <div className="chart-panel feature-chart">
             <div className="panel-heading">
               <div>
                 <p className="eyebrow">Last 14 days</p>
-                <h2>Total reps</h2>
+                <h2>Progress over time</h2>
+                <p>Daily reps with a running cumulative total.</p>
               </div>
-              <strong>{chartData.at(-1)?.totalReps ?? 0}</strong>
+              <strong>{chartData.at(-1)?.cumulativeReps ?? 0}</strong>
             </div>
             <ResponsiveContainer height={260} width="100%">
               <ComposedChart data={chartData} margin={chartMargins}>
@@ -543,9 +660,9 @@ function App() {
                 />
                 <Tooltip content={<CustomTooltip />} cursor={{ fill: 'var(--chart-cursor)' }} />
                 <Area
-                  dataKey="totalReps"
+                  dataKey="cumulativeReps"
                   fill="url(#totalRepsFill)"
-                  name="Total reps"
+                  name="Cumulative reps"
                   stroke="#22c55e"
                   strokeWidth={3}
                   type="monotone"
@@ -553,40 +670,9 @@ function App() {
                 <Bar
                   dataKey="totalReps"
                   fill="#14b8a6"
-                  name="Total reps"
+                  name="Daily reps"
                   opacity={0.55}
                   radius={[6, 6, 2, 2]}
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div className="chart-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">Favorites</p>
-                <h2>Pushups vs curls</h2>
-              </div>
-            </div>
-            <ResponsiveContainer height={240} width="100%">
-              <ComposedChart data={chartData} margin={chartMargins}>
-                <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
-                <XAxis dataKey="label" tick={axisStyle} tickLine={false} axisLine={false} />
-                <YAxis
-                  allowDecimals={false}
-                  tick={axisStyle}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'var(--chart-cursor)' }} />
-                <Bar dataKey="pushups" fill="#38bdf8" name="Pushups" radius={[6, 6, 2, 2]} />
-                <Line
-                  dataKey="bicep_curls"
-                  dot={{ fill: '#f97316', r: 4 }}
-                  name="Bicep curls"
-                  stroke="#f97316"
-                  strokeWidth={3}
-                  type="monotone"
                 />
               </ComposedChart>
             </ResponsiveContainer>
@@ -597,10 +683,24 @@ function App() {
               <div>
                 <p className="eyebrow">All exercises</p>
                 <h2>Daily trends</h2>
-                <p>Each line keeps its own exercise unit.</p>
+                <p>Tooltip values are daily totals, not cumulative totals.</p>
               </div>
             </div>
-            <ResponsiveContainer height={320} width="100%">
+            {recentExerciseTotals.length > 0 && (
+              <div className="exercise-total-strip">
+                {recentExerciseTotals.map((exercise, index) => (
+                  <span
+                    key={exercise.id}
+                    style={{
+                      '--series-color': exerciseColors[index % exerciseColors.length],
+                    } as CSSProperties}
+                  >
+                    {exercise.label}: {exercise.total} {exercise.unit}
+                  </span>
+                ))}
+              </div>
+            )}
+            <ResponsiveContainer height={340} width="100%">
               <ComposedChart data={chartData} margin={{ ...chartMargins, right: 18 }}>
                 <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
                 <XAxis dataKey="label" tick={axisStyle} tickLine={false} axisLine={false} />
@@ -623,7 +723,7 @@ function App() {
                 {DEFAULT_EXERCISES.map((exercise, index) => (
                   <Line
                     activeDot={{ r: 6, strokeWidth: 0 }}
-                    dataKey={exercise.id}
+                    dataKey={exerciseSeriesKey(exercise.id)}
                     dot={{ r: 3, strokeWidth: 0 }}
                     key={exercise.id}
                     name={`${exercise.label} (${exercise.unit})`}
@@ -639,9 +739,9 @@ function App() {
           <div className="chart-panel">
             <div className="panel-heading selector-heading">
               <div>
-                <p className="eyebrow">Explorer</p>
+                <p className="eyebrow">Focus</p>
                 <h2>{getExerciseLabel(chartExercise)}</h2>
-                <p>Shown in {chartUnit}.</p>
+                <p>Daily {chartUnit} with cumulative progress.</p>
               </div>
               <select
                 onChange={(event) => setChartExercise(event.target.value)}
@@ -666,10 +766,18 @@ function App() {
                 />
                 <Tooltip content={<CustomTooltip />} cursor={{ fill: 'var(--chart-cursor)' }} />
                 <Bar
-                  dataKey="selected"
+                  dataKey="selectedDaily"
                   fill="#a78bfa"
-                  name={`${getExerciseLabel(chartExercise)} ${chartUnit}`}
+                  name={`Daily ${chartUnit}`}
                   radius={[6, 6, 2, 2]}
+                />
+                <Line
+                  dataKey="selectedCumulative"
+                  dot={{ fill: '#f97316', r: 4 }}
+                  name={`Cumulative ${chartUnit}`}
+                  stroke="#f97316"
+                  strokeWidth={3}
+                  type="monotone"
                 />
               </ComposedChart>
             </ResponsiveContainer>
