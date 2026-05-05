@@ -37,9 +37,16 @@ import {
   type ExerciseLog,
   type ExerciseUnit,
 } from './db'
-import { DEFAULT_EXERCISES, exerciseById, getExerciseLabel } from './exercises'
+import {
+  DEFAULT_QUICK_EXERCISE_IDS,
+  EXERCISE_LIBRARY,
+  exerciseById,
+  getExerciseLabel,
+  sortExerciseIds,
+  type ExerciseDefinition,
+} from './exercises'
 
-type Tab = 'quick' | 'day' | 'dashboard' | 'export'
+type Tab = 'quick' | 'day' | 'dashboard' | 'export' | 'settings'
 
 type Toast = {
   log: ExerciseLog
@@ -74,11 +81,13 @@ const tabs: { id: Tab; label: string }[] = [
   { id: 'day', label: 'Day' },
   { id: 'dashboard', label: 'Charts' },
   { id: 'export', label: 'Data' },
+  { id: 'settings', label: 'Settings' },
 ]
 
 const chartMargins = { top: 12, right: 8, bottom: 0, left: -18 }
 const axisStyle = { fill: 'var(--chart-muted)', fontSize: 12, fontWeight: 700 }
 const chartWindowDays = 14
+const quickExercisesStorageKey = 'workout-tracker.quick-exercises.v1'
 const exerciseColors = [
   '#22c55e',
   '#38bdf8',
@@ -92,6 +101,42 @@ const exerciseColors = [
 
 function exerciseSeriesKey(exerciseId: string) {
   return `exercise_${exerciseId}`
+}
+
+function loadQuickExerciseIds() {
+  if (typeof window === 'undefined') {
+    return DEFAULT_QUICK_EXERCISE_IDS
+  }
+
+  try {
+    const stored = window.localStorage.getItem(quickExercisesStorageKey)
+    const parsed = stored ? (JSON.parse(stored) as unknown) : null
+
+    if (!Array.isArray(parsed)) {
+      return DEFAULT_QUICK_EXERCISE_IDS
+    }
+
+    const validIds = parsed.filter(
+      (exerciseId): exerciseId is string =>
+        typeof exerciseId === 'string' && exerciseById.has(exerciseId),
+    )
+
+    return validIds.length > 0
+      ? sortExerciseIds([...new Set(validIds)])
+      : DEFAULT_QUICK_EXERCISE_IDS
+  } catch {
+    return DEFAULT_QUICK_EXERCISE_IDS
+  }
+}
+
+function getExerciseGroups(exercises: ExerciseDefinition[]) {
+  return exercises.reduce<Record<string, ExerciseDefinition[]>>(
+    (groups, exercise) => {
+      groups[exercise.category] = [...(groups[exercise.category] ?? []), exercise]
+      return groups
+    },
+    {},
+  )
 }
 
 function totalsByExercise(logs: ExerciseLog[]) {
@@ -160,14 +205,25 @@ function App() {
   const [selectedDate, setSelectedDate] = useState(toLocalDateKey(new Date()))
   const [selectedLogs, setSelectedLogs] = useState<ExerciseLog[]>([])
   const [toast, setToast] = useState<Toast | null>(null)
-  const [customExercise, setCustomExercise] = useState(DEFAULT_EXERCISES[0].id)
+  const [quickExerciseIds, setQuickExerciseIds] = useState(loadQuickExerciseIds)
+  const [customExercise, setCustomExercise] = useState(
+    DEFAULT_QUICK_EXERCISE_IDS[0],
+  )
   const [customAmount, setCustomAmount] = useState('')
   const [chartExercise, setChartExercise] = useState('pushups')
+  const [exerciseFilter, setExerciseFilter] = useState('')
   const [importStatus, setImportStatus] = useState('')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const todayKey = toLocalDateKey(new Date())
   const isToday = selectedDate === todayKey
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      quickExercisesStorageKey,
+      JSON.stringify(quickExerciseIds),
+    )
+  }, [quickExerciseIds])
 
   const refreshLogs = useCallback(async (dateKey = selectedDate) => {
     const [allLogs, dayLogs] = await Promise.all([
@@ -268,17 +324,60 @@ function App() {
     await refreshLogs(selectedDate)
   }
 
+  function handleQuickExerciseToggle(exerciseId: string) {
+    setQuickExerciseIds((exerciseIds) => {
+      if (exerciseIds.includes(exerciseId)) {
+        return exerciseIds.length > 1
+          ? exerciseIds.filter((id) => id !== exerciseId)
+          : exerciseIds
+      }
+
+      return sortExerciseIds([...exerciseIds, exerciseId])
+    })
+  }
+
+  function handleResetQuickExercises() {
+    setQuickExerciseIds(DEFAULT_QUICK_EXERCISE_IDS)
+  }
+
   const selectedTotals = useMemo(
     () => totalsByExercise(selectedLogs),
     [selectedLogs],
   )
 
+  const quickExercises = useMemo(
+    () =>
+      quickExerciseIds
+        .map((exerciseId) => exerciseById.get(exerciseId))
+        .filter((exercise): exercise is ExerciseDefinition => Boolean(exercise)),
+    [quickExerciseIds],
+  )
+
+  const quickExerciseSet = useMemo(
+    () => new Set(quickExerciseIds),
+    [quickExerciseIds],
+  )
+
   const daySummary = useMemo(() => {
-    return DEFAULT_EXERCISES.map((exercise) => ({
-      ...exercise,
-      total: selectedTotals[exercise.id] ?? 0,
-    })).filter((exercise) => exercise.total > 0)
-  }, [selectedTotals])
+    const exerciseIds = sortExerciseIds(Object.keys(selectedTotals))
+
+    return exerciseIds
+      .map((exerciseId) => {
+        const exercise = exerciseById.get(exerciseId)
+        const unit =
+          exercise?.unit ??
+          selectedLogs.find((log) => log.exercise === exerciseId)?.unit ??
+          'reps'
+
+        return {
+          id: exerciseId,
+          label: exercise?.label ?? exerciseId,
+          total: selectedTotals[exerciseId] ?? 0,
+          unit,
+        }
+      })
+      .filter((exercise) => exercise.total > 0)
+  }, [selectedLogs, selectedTotals])
 
   const quickStats = useMemo(() => {
     const reps = selectedLogs
@@ -291,9 +390,41 @@ function App() {
     return { reps, seconds, entries: selectedLogs.length }
   }, [selectedLogs])
 
+  const loggedExerciseIds = useMemo(
+    () => sortExerciseIds([...new Set(logs.map((log) => log.exercise))]),
+    [logs],
+  )
+
+  const chartExercises = useMemo(
+    () =>
+      loggedExerciseIds
+        .map((exerciseId) => exerciseById.get(exerciseId))
+        .filter((exercise): exercise is ExerciseDefinition => Boolean(exercise)),
+    [loggedExerciseIds],
+  )
+
+  const exerciseGroups = useMemo(
+    () => getExerciseGroups(EXERCISE_LIBRARY),
+    [],
+  )
+
+  const filteredExerciseGroups = useMemo(() => {
+    const query = exerciseFilter.trim().toLowerCase()
+
+    if (!query) {
+      return exerciseGroups
+    }
+
+    return getExerciseGroups(
+      EXERCISE_LIBRARY.filter((exercise) =>
+        `${exercise.label} ${exercise.category}`.toLowerCase().includes(query),
+      ),
+    )
+  }, [exerciseFilter, exerciseGroups])
+
   const chartData = useMemo<ChartPoint[]>(() => {
     const emptyExerciseTotals = Object.fromEntries(
-      DEFAULT_EXERCISES.map((exercise) => [exerciseSeriesKey(exercise.id), 0]),
+      chartExercises.map((exercise) => [exerciseSeriesKey(exercise.id), 0]),
     )
 
     const totals = logs.reduce<Record<string, ChartPoint>>((days, log) => {
@@ -352,7 +483,7 @@ function App() {
       const cumulativeReps = progress.cumulativeReps + point.totalReps
       const selectedCumulative =
         progress.selectedCumulative + point.selectedDaily
-      const activeExercises = DEFAULT_EXERCISES.filter(
+      const activeExercises = chartExercises.filter(
         (exercise) => Number(point[exerciseSeriesKey(exercise.id)] ?? 0) > 0,
       ).length
 
@@ -376,7 +507,7 @@ function App() {
     })
 
     return result.days
-  }, [chartExercise, logs, todayKey])
+  }, [chartExercise, chartExercises, logs, todayKey])
 
   const chartSummary = useMemo(() => {
     const activeDays = chartData.filter(
@@ -387,7 +518,7 @@ function App() {
       (total, day) => total + day.totalSeconds,
       0,
     )
-    const exerciseTotals = DEFAULT_EXERCISES.map((exercise) => ({
+    const exerciseTotals = chartExercises.map((exercise) => ({
       ...exercise,
       total: chartData.reduce(
         (total, day) => total + Number(day[exerciseSeriesKey(exercise.id)] ?? 0),
@@ -403,17 +534,17 @@ function App() {
       periodSeconds,
       topExercise,
     }
-  }, [chartData])
+  }, [chartData, chartExercises])
 
   const recentExerciseTotals = useMemo(() => {
-    return DEFAULT_EXERCISES.map((exercise) => ({
+    return chartExercises.map((exercise) => ({
       ...exercise,
       total: chartData.reduce(
         (total, day) => total + Number(day[exerciseSeriesKey(exercise.id)] ?? 0),
         0,
       )
     })).filter((exercise) => exercise.total > 0)
-  }, [chartData])
+  }, [chartData, chartExercises])
 
   const chartUnit = exerciseById.get(chartExercise)?.unit ?? 'reps'
 
@@ -491,7 +622,7 @@ function App() {
           )}
 
           <div className="exercise-grid">
-            {DEFAULT_EXERCISES.map((exercise) => (
+            {quickExercises.map((exercise) => (
               <article className="exercise-card" key={exercise.id}>
                 <div className="exercise-card-heading">
                   <div>
@@ -500,9 +631,7 @@ function App() {
                       {formatDateLabel(selectedDate)}:{' '}
                       {formatAmount(selectedTotals[exercise.id] ?? 0, exercise.unit)}
                     </p>
-                    {['bicep_curls', 'arm_raises'].includes(exercise.id) && (
-                      <p className="exercise-note">+10 means 10 reps each arm.</p>
-                    )}
+                    {exercise.note && <p className="exercise-note">{exercise.note}</p>}
                   </div>
                   <span>{exercise.unit}</span>
                 </div>
@@ -534,10 +663,14 @@ function App() {
                   onChange={(event) => setCustomExercise(event.target.value)}
                   value={customExercise}
                 >
-                  {DEFAULT_EXERCISES.map((exercise) => (
-                    <option key={exercise.id} value={exercise.id}>
-                      {exercise.label}
-                    </option>
+                  {Object.entries(exerciseGroups).map(([category, exercises]) => (
+                    <optgroup key={category} label={category}>
+                      {exercises.map((exercise) => (
+                        <option key={exercise.id} value={exercise.id}>
+                          {exercise.label}
+                        </option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
               </label>
@@ -613,6 +746,9 @@ function App() {
             <article className="chart-stat-card">
               <span>14-day reps</span>
               <strong>{chartSummary.periodReps}</strong>
+              {chartSummary.periodSeconds > 0 && (
+                <small>{chartSummary.periodSeconds} seconds</small>
+              )}
             </article>
             <article className="chart-stat-card">
               <span>Active days</span>
@@ -720,18 +856,22 @@ function App() {
                     paddingTop: 12,
                   }}
                 />
-                {DEFAULT_EXERCISES.map((exercise, index) => (
-                  <Line
-                    activeDot={{ r: 6, strokeWidth: 0 }}
-                    dataKey={exerciseSeriesKey(exercise.id)}
-                    dot={{ r: 3, strokeWidth: 0 }}
-                    key={exercise.id}
-                    name={`${exercise.label} (${exercise.unit})`}
-                    stroke={exerciseColors[index % exerciseColors.length]}
-                    strokeWidth={3}
-                    type="monotone"
-                  />
-                ))}
+                {chartExercises.length === 0 ? (
+                  <Line dataKey="totalReps" hide name="No logs yet" />
+                ) : (
+                  chartExercises.map((exercise, index) => (
+                    <Line
+                      activeDot={{ r: 6, strokeWidth: 0 }}
+                      dataKey={exerciseSeriesKey(exercise.id)}
+                      dot={{ r: 3, strokeWidth: 0 }}
+                      key={exercise.id}
+                      name={`${exercise.label} (${exercise.unit})`}
+                      stroke={exerciseColors[index % exerciseColors.length]}
+                      strokeWidth={3}
+                      type="monotone"
+                    />
+                  ))
+                )}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -747,10 +887,14 @@ function App() {
                 onChange={(event) => setChartExercise(event.target.value)}
                 value={chartExercise}
               >
-                {DEFAULT_EXERCISES.map((exercise) => (
-                  <option key={exercise.id} value={exercise.id}>
-                    {exercise.label}
-                  </option>
+                {Object.entries(exerciseGroups).map(([category, exercises]) => (
+                  <optgroup key={category} label={category}>
+                    {exercises.map((exercise) => (
+                      <option key={exercise.id} value={exercise.id}>
+                        {exercise.label}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </div>
@@ -819,6 +963,73 @@ function App() {
               Clear all
             </button>
           </article>
+        </section>
+      )}
+
+      {activeTab === 'settings' && (
+        <section className="screen settings-screen">
+          <article className="tool-card settings-card">
+            <div className="settings-heading">
+              <div>
+                <p className="eyebrow">Exercise library</p>
+                <h2>Quick Log</h2>
+                <p>{quickExerciseIds.length} exercises shown</p>
+              </div>
+              <button
+                className="ghost-button"
+                onClick={handleResetQuickExercises}
+                type="button"
+              >
+                Reset
+              </button>
+            </div>
+            <label className="search-field">
+              <span>Search exercises</span>
+              <input
+                onChange={(event) => setExerciseFilter(event.target.value)}
+                placeholder="Pushups"
+                type="search"
+                value={exerciseFilter}
+              />
+            </label>
+          </article>
+
+          <div className="library-list">
+            {Object.keys(filteredExerciseGroups).length === 0 ? (
+              <p className="empty-state">No exercises found.</p>
+            ) : (
+              Object.entries(filteredExerciseGroups).map(([category, exercises]) => (
+                <section className="library-section" key={category}>
+                  <h3>{category}</h3>
+                  <div className="library-exercises">
+                    {exercises.map((exercise) => {
+                      const isSelected = quickExerciseSet.has(exercise.id)
+                      const isOnlySelected =
+                        isSelected && quickExerciseIds.length === 1
+
+                      return (
+                        <label className="exercise-toggle-row" key={exercise.id}>
+                          <input
+                            checked={isSelected}
+                            disabled={isOnlySelected}
+                            onChange={() => handleQuickExerciseToggle(exercise.id)}
+                            type="checkbox"
+                          />
+                          <span className="toggle-copy">
+                            <strong>{exercise.label}</strong>
+                            <small>
+                              {exercise.unit} - +{exercise.presets.join(' / +')}
+                            </small>
+                            {exercise.note && <em>{exercise.note}</em>}
+                          </span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                </section>
+              ))
+            )}
+          </div>
         </section>
       )}
     </main>

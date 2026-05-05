@@ -93,7 +93,7 @@ label span {
 .tabs {
   display: grid;
   gap: 4px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   padding: 4px;
   top: 70px;
 }
@@ -522,6 +522,97 @@ input[type='date'] {
   gap: 12px;
 }
 
+.settings-screen {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-heading {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.settings-card {
+  display: grid;
+  gap: 14px;
+}
+
+.search-field input {
+  padding-left: 14px;
+}
+
+.library-list {
+  display: grid;
+  gap: 12px;
+}
+
+.library-section {
+  background: linear-gradient(180deg, rgba(17, 24, 39, 0.9), rgba(15, 23, 42, 0.74));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.library-section h3 {
+  color: var(--strong);
+  font-size: 0.96rem;
+  margin: 0;
+}
+
+.library-exercises {
+  display: grid;
+  gap: 8px;
+}
+
+.exercise-toggle-row {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.48);
+  border: 1px solid rgba(148, 163, 184, 0.09);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto 1fr;
+  min-height: 62px;
+  padding: 10px 12px;
+}
+
+.exercise-toggle-row input {
+  accent-color: var(--accent);
+  height: 22px;
+  width: 22px;
+}
+
+.exercise-toggle-row input:disabled {
+  opacity: 0.42;
+}
+
+.toggle-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.toggle-copy strong {
+  color: var(--strong);
+}
+
+.toggle-copy small,
+.toggle-copy em {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-style: normal;
+  font-weight: 780;
+}
+
+.toggle-copy em {
+  color: var(--accent-strong);
+}
+
 .tool-card input[type='file'] {
   margin-top: 12px;
   padding: 12px;
@@ -551,6 +642,11 @@ input[type='date'] {
 
   .date-dock {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .tab-button {
+    font-size: 0.72rem;
+    padding-inline: 4px;
   }
 
   .date-field {
@@ -587,6 +683,10 @@ input[type='date'] {
 
   .selector-heading {
     grid-template-columns: 1fr minmax(180px, 240px);
+  }
+
+  .library-exercises {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
